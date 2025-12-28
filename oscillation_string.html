@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<title>Oscillation Simulator — Improved</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  /* Giao diện */
+  body {
+    margin: 0;
+    font-family: 'Segoe UI', Tahoma, sans-serif;
+    display: flex;
+    height: 100vh;
+    background: linear-gradient(135deg, #6EE7B7, #3B82F6);
+    color: #fff;
+  }
+  #sidebar {
+    flex: 0 0 auto;
+    width: 280px;
+    background: rgba(0,0,0,0.25);
+    backdrop-filter: blur(10px);
+    padding: 20px;
+    overflow-y: auto;
+    box-sizing: border-box;
+  }
+  h2 { text-align:center; margin-bottom: 12px; }
+  label { font-weight: bold; display:block; margin-top:12px; }
+  input[type=range], input[type=number], select {
+    width: 100%; padding: 6px; border-radius: 8px; border: none; margin-top:6px; box-sizing:border-box;
+  }
+  .btns { margin-top:12px; display:flex; gap:6px; }
+  button {
+    flex:1; padding:10px; border-radius:8px; border:none; cursor:pointer; font-weight:700; background:#ffd54f; color:#000;
+  }
+  #main { flex:1; padding:20px; display:flex; flex-direction:column; gap:18px; box-sizing:border-box; }
+  canvas { 
+      width: 100%;
+      height: 520px;
+      background:#fff; 
+      border-radius:10px; 
+      border:2px solid #000; 
+      display:block; }
+  .eqn { margin-top:12px; background: rgba(255,255,255,0.12); padding:8px; border-radius:8px; color:#fff; font-weight:600; }
+  .small { font-size:13px; color: #f3f3f3; opacity:0.95; }
+</style>
+</head>
+<body>
+
+<div id="sidebar" >
+  <h2>⚙ Thông số</h2>
+
+  <label>Biên độ A (cm):</label>
+  <input id="A_slider" type="range" min="0" max="10" step="0.1" value="5">
+  <input id="A_num" type="number" min="0" max="10" step="0.1" value="5">
+
+  <label>ω (rad/s):</label>
+  <input id="w_slider" type="range" min="0.5" max="20" step="0.1" value="6.28">
+  <input id="w_num" type="number" min="0.5" max="20" step="0.1" value="6.28">
+
+  <label>Pha ban đầu φ (rad):</label>
+  <input id="phi_slider" type="range" min="-3.14" max="3.14" step="0.01" value="0">
+  <input id="phi_num" type="number" min="-3.14" max="3.14" step="0.01" value="0">
+
+  <label>Hàm:</label>
+  <select id="func"><option value="cos">cos</option><option value="sin">sin</option></select>
+
+  <div class="btns">
+    <button id="toggleBtn">▶ Chạy</button>
+    <button id="resetBtn">🔄 Khôi phục</button>
+  </div>
+
+  <div class="eqn" id="equation">x(t) = 5.00 cm . cos(6.28 t + 0.00)</div>
+  <div class="small">Phương trình cập nhật theo tham số. Đơn vị x: cm.</div>
+</div>
+
+<div id="main">
+  <canvas id="canvas" height="520"></canvas>
+</div>
+
+<script>
+// Thiết lập tham chiếu đến các phần tử DOM (khắc phục lồi liên kết)
+const A_slider = document.getElementById('A_slider');
+const A_num = document.getElementById('A_num');
+const w_slider = document.getElementById('w_slider');
+const w_num = document.getElementById('w_num');
+const phi_slider = document.getElementById('phi_slider');
+const phi_num = document.getElementById('phi_num');
+const func = document.getElementById('func');
+
+const toggleBtn = document.getElementById('toggleBtn');
+const resetBtn = document.getElementById('resetBtn');
+const equationDiv = document.getElementById('equation');
+
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+// Trạng thái
+let A_cm = parseFloat(A_num.value);
+let omega = parseFloat(w_num.value);
+let phi = parseFloat(phi_num.value);
+let mode = func.value;
+
+let t = 0;
+let dt = 0.02;
+let running = false;
+let paused = false;
+let history = [];
+let t_offset = 0; //slide for timeline
+
+// Hàm hỗ trợ chuyển đổi đơn vị
+function cmToM(cm){ return cm/100; }
+function mToCm(m){ return m*100; }
+
+// Liên kết dữ liệu giữa slider và ô nhập một cách ổn định
+function bind(sliderEl, numEl, onChange) {
+  sliderEl.addEventListener('input', () => { numEl.value = sliderEl.value; onChange(); });
+  numEl.addEventListener('input', () => {
+    // Ép giá trị vào trong khoảng min/max giống như slider
+    if(numEl.value==='') return;
+    let v = parseFloat(numEl.value);
+    if(v<parseFloat(sliderEl.min)) v=parseFloat(sliderEl.min);
+    if(v>parseFloat(sliderEl.max)) v=parseFloat(sliderEl.max);
+    sliderEl.value = v;
+    onChange();
+  });
+}
+
+bind(A_slider,A_num,()=>{ A_cm = parseFloat(A_num.value); updateEquation(); });
+bind(w_slider,w_num,()=>{ omega = parseFloat(w_num.value); updateEquation(); });
+bind(phi_slider,phi_num,()=>{ phi = parseFloat(phi_num.value); updateEquation(); });
+func.addEventListener('change', ()=>{ mode = func.value; updateEquation(); });
+
+// Hiển thị phương trình
+function updateEquation(){
+  const Ashow = Number(A_cm).toFixed(2).replace(".",",");
+  const wshow = Number(omega).toFixed(2).replace(".",",");
+  const phishow = Math.abs(phi).toFixed(2).replace(".",",");
+  const fun = (mode==='cos')?'cos':'sin';
+  
+  let phiStr = '';
+  if (phi >= 0) {
+    phiStr = ` + ${phishow}`;
+  } else if (phi < 0) {
+    phiStr = ` − ${phishow}`;
+    }
+
+equationDiv.textContent = `x(t) = ${Ashow} . ${fun}(${wshow} t${phiStr}) (cm)`;
+}
+
+// Khởi tạo
+updateEquation();
+
+//Tính x(t) và trả về đơn vị m
+function computeX(tval){
+  const A_m = cmToM(A_cm);
+  const arg = omega * tval + phi;
+  return (mode==='cos')? A_m*Math.cos(arg): A_m*Math.sin(arg);
+}
+
+//Vẽ mô phỏng (lò xo và vật nặng)
+function drawSimulation(x_m){
+  // x_m tính bằng m, chuyển sang px để hiển thị, căn giữa theo chiều ngang
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  const centerX = canvas.width/2;
+  const centerY = canvas.height/2;
+  const scale = (canvas.height-80)/24*100; //px trên m, cho giả lập hình ảnh, dùng để tăng giảm độ dài
+
+  // Điểm cố định của lò xo
+  const anchorX = centerX;
+  const anchorY = 30;
+  
+  // Vẽ tường cố định
+  ctx.fillStyle='#444';
+  ctx.fillRect(anchorX-40,anchorY,80,10);
+
+  // Lò xo: vẽ dạng răng cưa từ điểm cố định đến tâm vật nặng
+  const massX = centerX;
+  const massY = centerY + x_m*scale;
+  const springEndY = massY - 15; //Điểm gắn vào vật nặng
+
+  //Vẽ đường lò xo
+  ctx.strokeStyle='#222';
+  ctx.lineWidth=3;
+  ctx.beginPath();
+  const coils=10;
+  const totalLen = Math.max(30, springEndY - anchorY -15);
+  const step = totalLen/(coils*2);
+  let px=anchorX, py=anchorY;
+  ctx.moveTo(px, py+10);
+  for(let i=0;i<coils*2;i++){
+    py += step;
+    px = anchorX + (i%2===0?-15:15); //tăng mức độ giãn cho lò xo
+    ctx.lineTo(px, py+10);
+  }
+  ctx.lineTo(anchorX, springEndY);
+  ctx.stroke();
+
+  //Thông số vật nặng
+  const wRect =36, hRect=28;
+  const rectX = massX - wRect/2;
+  const rectY = massY - hRect/2;
+  //Đổ bóng
+  ctx.fillStyle='rgba(0,0,0,0.12)';
+  ctx.fillRect(rectX+6, rectY+10, wRect,6);
+  //Khối chính của vật nặng
+  ctx.fillStyle='#ff3b7f';
+  ctx.fillRect(rectX, rectY, wRect, hRect);
+  ctx.strokeStyle='#b3164f';
+  ctx.lineWidth=2;
+  ctx.strokeRect(rectX, rectY, wRect, hRect);
+  //Vệt sáng nhỏ
+  ctx.fillStyle='rgba(255,255,255,0.6)';
+  ctx.fillRect(rectX+4, rectY+4, Math.max(4,wRect/3),6);
+}
+
+// Vẽ đồ thị
+function drawGraph(){
+
+  //Bố cục và tỉ lệ
+  const originXhorizontal = 20;//lề trái trục ngang
+  const originXvertical = canvas.width/2;//lề trái trục dọc
+  const originY = canvas.height/2;//căn giữa theo chiều dọc
+  const pxPerSec = 80; //tỉ lệ ngang (px trên s)
+  const pxPerCm = (canvas.height-80)/24; //tỉ lệ dọc (px trên cm)
+
+  //Vẽ lưới mờ
+  ctx.strokeStyle='#e6e6e6';
+  ctx.lineWidth=0.6;
+  for(let gx=0;gx<canvas.width;gx+=50){ctx.beginPath();ctx.moveTo(gx,0);ctx.lineTo(gx,canvas.height/2);ctx.stroke();}
+  for(let gy=0;gy<canvas.height/2;gy+=54){ctx.beginPath();ctx.moveTo(0,gy);ctx.lineTo(canvas.width,gy);ctx.stroke();}
+
+  //Trục toạn độ
+  ctx.strokeStyle='#000';
+  ctx.lineWidth=2;
+  //Trục đứng
+  ctx.beginPath(); ctx.moveTo(originXvertical,10); ctx.lineTo(originXvertical,canvas.height-10); ctx.stroke();
+  //Trục ngang
+  ctx.beginPath(); ctx.moveTo(originXhorizontal,originY); ctx.lineTo(canvas.width-20,originY); ctx.stroke();
+
+  //Mũi tên trục
+  ctx.fillStyle='#000';
+  //dọc
+  ctx.beginPath(); ctx.moveTo(originXvertical,10); ctx.lineTo(originXvertical-6,22); ctx.lineTo(originXvertical+6,22); ctx.closePath(); ctx.fill();
+  //ngang
+  ctx.beginPath(); ctx.moveTo(canvas.width-10,originY); ctx.lineTo(canvas.width-20,originY-6); ctx.lineTo(canvas.width-20,originY+6); ctx.closePath(); ctx.fill();
+  
+  //Vạch chia trên trục thời gian
+  ctx.fillStyle='#000';
+  ctx.font='13px Arial';
+  const tickSec=0.5, marginRight=20;
+  const totalVisibleTime = (canvas.width-originXhorizontal-marginRight)/pxPerSec; //Tính số tick cần hiển thị dựa trên độ rộng canvas
+  if(typeof window.initializedOffset==="undefined"){ t_offset=-totalVisibleTime/2; window.initializedOffset=true; }
+  const firstTick = Math.floor(t_offset/tickSec);
+  const lastTick = Math.ceil((t_offset+totalVisibleTime-0.5)/tickSec);
+
+  for(let i=firstTick;i<=lastTick;i++){
+    const tLabel=i*tickSec;
+    const tx = originXhorizontal+(tLabel-t_offset)*pxPerSec;
+    if(tLabel<0 || tx<originXhorizontal) continue; //chỉ vẽ trên canvas
+    //vẽ tick nhỏ
+    ctx.beginPath(); ctx.moveTo(tx, originY-6); ctx.lineTo(tx, originY+6); ctx.stroke();
+    //vẽ nhãn thời gian với dấu phẩy
+    if(Math.abs(tLabel)>1e-8) ctx.fillText(tLabel.toFixed(1).replace(".",","), tx-8, originY+18);
+  }
+
+  //Vạch chia trục li độ
+  const maxCmUp = Math.floor(((canvas.height-80)/2)/pxPerCm -2);
+  for(let k=-maxCmUp;k<=maxCmUp;k++){
+    const y=originY-k*pxPerCm;
+    if(y<10 || y>canvas.height-10) continue;
+    ctx.beginPath(); ctx.moveTo(originXvertical-6, y); ctx.lineTo(originXvertical+6,y); ctx.stroke();
+    if(k%2===0) ctx.fillText((k).toString().replace(".",","), originXvertical-40, y+4);//chỉ hiển thị nhãn mỗi 2cm để tránh rối
+  }
+
+  //Nhãn trục
+  ctx.fillText('t (s)', canvas.width-30, originY-15);
+  ctx.fillText('x (cm)', originXvertical-50, 25);
+
+  //Vẽ đường sin/cos
+  if(history.length<2) return;
+  ctx.strokeStyle='#2563eb'; ctx.lineWidth=2; ctx.beginPath();
+  let started=false;
+  for(let i=0;i<history.length;i++){
+    const p = history[i];
+    const screenX = originXhorizontal+(p.t-t_offset)*pxPerSec;
+    if(screenX<originXhorizontal) continue;
+    const screenY = originY-(mToCm(p.x)*pxPerCm);// chuyển x_m sang cm rồi sang px
+    if(!started){ctx.moveTo(screenX,screenY); started=true;} else ctx.lineTo(screenX,screenY);
+  }
+  ctx.stroke();
+
+  //Giới hạn kích thước mảng history, chỉ giữ dữ liệu trong N giây gần nhất
+  const maxPoints=2000;
+  if(history.length>maxPoints) history.splice(0,history.length-maxPoints);
+}
+
+//Vòng lặp cập nhật chính
+function update(){
+  if(running && !paused){
+    const x = computeX(t);
+    history.push({t: t, x: x});
+    t_offset += dt;//dời trục thời gian sang phải
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    drawSimulation(-x);
+    drawGraph();
+    t+=dt;
+  }
+  requestAnimationFrame(update);
+}
+update();
+
+//Các nút điều khiển
+toggleBtn.onclick = () => {
+  if(!running){
+    running=true; paused=false;
+    toggleBtn.textContent="⏸ Tạm dừng";
+  } else {
+    paused=!paused;
+    toggleBtn.textContent = paused ? "▶ Tiếp tục" : "⏸ Tạm dừng";
+  }
+};
+
+resetBtn.onclick = () => {
+  running=false; paused=false;
+  toggleBtn.textContent="▶ Chạy";
+  t=0; t_offset=0; history=[];
+  window.initializedOffset=undefined;
+  const a = computeX(t);
+  drawSimulation(-a);
+  drawGraph();
+};
+
+//Các sửa đổi nhỏ, đảm bảo reset history khi tham số thay đổi
+[A_slider,A_num,w_slider,w_num,phi_slider,phi_num,func].forEach(el=>{
+  el.addEventListener('change',()=>{
+    history=[]; t=0; t_offset=0; window.initializedOffset=undefined;
+  });
+});
+
+function resizeCanvas() {
+  const rect = canvas.getBoundingClientRect();
+
+  // Giữ height cố định
+  canvas.width = rect.width;
+  canvas.height = 520;
+
+  // Reset trạng thái vẽ
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+  // Vẽ lại khung hiện tại
+  history = [];
+  t = 0;
+  t_offset = 0;
+  window.initializedOffset = undefined;
+
+  drawSimulation(0);
+  drawGraph();
+}
+
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas(); // gọi ngay khi load
+
+//Vẽ khung ban đầu
+drawSimulation(0);
+drawGraph();
+</script>
+</body>
+</html>
