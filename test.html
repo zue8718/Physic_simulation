@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<title>Pendulum Simulator — Con lắc đơn</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<style>
+  /* Giao diện */
+  body {
+    margin: 0;
+    font-family: 'Segoe UI', Tahoma, sans-serif;
+    display: flex;
+    height: 100vh;
+    background: linear-gradient(135deg, #6EE7B7, #3B82F6);
+    color: #fff;
+  }
+  #sidebar {
+    flex:0 0 auto;
+    width: 300px;
+    background: rgba(0,0,0,0.25);
+    backdrop-filter: blur(10px);
+    padding: 20px;
+    overflow-y: auto;
+    box-sizing: border-box;
+  }
+  h2 { text-align:center; margin-bottom: 12px; }
+  label { font-weight: bold; display:block; margin-top:12px; }
+  input[type=range], input[type=number], select {
+    width: 100%; padding: 6px; border-radius: 8px; border: none; margin-top:6px; box-sizing:border-box;
+  }
+  .btns { margin-top:12px; display:flex; gap:6px; }
+  button {
+    flex:1; padding:10px; border-radius:8px; border:none; cursor:pointer; font-weight:700; background:#ffd54f; color:#000;
+  }
+  #main { flex:1; padding:20px; display:flex; flex-direction:column; gap:18px; box-sizing:border-box; }
+  canvas { 
+      width: 100%;
+      height: 500px;
+      background:#fff; 
+      border-radius:10px; 
+      border:2px solid #000; 
+      display:block; }
+  .eqn { margin-top:12px; background: rgba(255,255,255,0.12); padding:8px; border-radius:8px; color:#fff; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;font-size: 14px;}
+  .small { font-size:13px; color: #f3f3f3; opacity:0.95; }
+  .row { display:flex; gap:8px; align-items:center; }
+  .muted { font-size:12px; opacity:0.9; color:#f3f3f3; }
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+  <h2>⚙ Con lắc đơn</h2>
+
+  <div>
+    <label>θ₀ (rad):</label>
+    <div class="row">
+      <input id="A_slider" type="range" min="0" max="0.7" step="0.01" value="0.40">
+      <input id="A_num" type="number" min="0" max="0.7" step="0.01" value="0.40" style="width:60px">
+    </div>
+
+    <label>L (m):</label>
+    <div class="row">
+      <input id="L_slider" type="range" min="0.1" max="1.0" step="0.01" value="0.5">
+      <input id="L_num" type="number" min="0.1" max="1.0" step="0.01" value="0.5" style="width:60px">
+    </div>
+  </div>
+
+  <div>
+    <label>ω (rad/s) — tính từ g/L:</label>
+    <div class="row">
+      <input id="w_display" type="number" step="0.01" value="0" readonly>
+      <div class="muted">g=9,81</div>
+    </div>
+
+    <label>φ (rad):</label>
+    <div class="row">
+      <input id="phi_slider" type="range" min="-3.14" max="3.14" step="0.01" value="0">
+      <input id="phi_num" type="number" min="-3.14" max="3.14" step="0.01" value="0" style="width:60px">
+    </div>
+  </div>
+
+  <div class="btns">
+    <select id="func" style="flex:0.5"><option value="cos">cos</option><option value="sin">sin</option></select>
+    <select id="speed" style="flex:0.5">
+      <option value="1">1×</option>
+      <option value="0.5">0.5×</option>
+      <option value="0.25">0.25×</option>
+    </select>
+  </div>
+  
+  <div class="btns">
+    <button id="toggleBtn">▶ Chạy</button>
+    <button id="resetBtn">🔄 Khôi phục</button>
+  </div>
+
+  <div class="eqn" id="equation">θ(t) = 0,20 . cos(π t + 0.00) (rad)</div>
+  <div class="small">Phương trình: θ(t) = θ₀ . cos(ω t + φ)</div>
+</div>
+
+<div id="main">
+  <canvas id="canvas" height="500"></canvas>
+</div>
+
+<script>
+/* DOM */
+const A_slider = document.getElementById('A_slider');
+const A_num = document.getElementById('A_num');
+const L_slider = document.getElementById('L_slider');
+const L_num = document.getElementById('L_num');
+const w_display = document.getElementById('w_display');
+const phi_slider = document.getElementById('phi_slider');
+const phi_num = document.getElementById('phi_num');
+const func = document.getElementById('func');
+const speedSel = document.getElementById('speed');
+
+const toggleBtn = document.getElementById('toggleBtn');
+const resetBtn = document.getElementById('resetBtn');
+const equationDiv = document.getElementById('equation');
+
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+/* Hằng số */
+const g = 9.81; // m/s^2
+
+/* Trạng thái */
+let theta0 = parseFloat(A_num.value); // rad
+let L = parseFloat(L_num.value); // m
+let omega = Math.sqrt(g / L);
+let phi = parseFloat(phi_num.value);
+let mode = func.value;
+
+let t = 0;
+let dt = 0.02;
+let running = false;
+let paused = false;
+let history = []; // lưu {t, x} với x (m)
+let t_offset = 0;
+let pxPerMeter = 250; // scale hiển thị cho con lắc (px/m)
+let simSpeed = 1; //Tốc độ mô phỏng (1x, 0.5x, 0.25x)
+
+/* Helpers */
+function clamp(v, a, b){ return Math.max(a, Math.min(b, v)); }
+function mToCm(m){ return m*100; }
+
+/* Bind helpers */
+function bind(sliderEl, numEl, onChange) {
+  sliderEl.addEventListener('input', () => {
+    numEl.value = sliderEl.value;
+    onChange();
+  });
+  numEl.addEventListener('input', () => {
+    if(numEl.value === '') return;
+    let v = parseFloat(numEl.value);
+    if (v < parseFloat(sliderEl.min)) v = parseFloat(sliderEl.min);
+    if (v > parseFloat(sliderEl.max)) v = parseFloat(sliderEl.max);
+    sliderEl.value = v;
+    onChange();
+  });
+}
+
+/* Cập nhật hiển thị ω và phương trình */
+function updateOmegaFromL(){
+  omega = Math.sqrt(g / L);
+  w_display.value = omega.toFixed(3);
+}
+function updateEquation(){
+  const th = Number(theta0).toFixed(2).replace(".",",");
+  const wsh = Number(omega).toFixed(2).replace(".",",");
+  const ph = Math.abs(phi).toFixed(2).replace(".",",");
+  const fun = (mode === 'cos') ? 'cos' : 'sin';
+  
+  let phiStr = '';
+  if (phi >= 0) {
+    phiStr = ` + ${ph}`;
+  } else if (phi < 0) {
+    phiStr = ` − ${ph}`;
+    }
+
+  equationDiv.textContent = `x(t) = ${th} . ${fun}(${wsh} t${phiStr}) (cm)`;
+}
+
+/* Khởi tạo liên kết */
+bind(A_slider, A_num, ()=>{
+  theta0 = parseFloat(A_num.value);
+  history = []; t = 0; t_offset = 0; window.initializedOffset = undefined;
+  updateEquation();
+});
+bind(L_slider, L_num, ()=>{
+  L = parseFloat(L_num.value);
+  updateOmegaFromL();
+  history = []; t = 0; t_offset = 0; window.initializedOffset = undefined;
+  updateEquation();
+});
+bind(phi_slider, phi_num, ()=>{
+  phi = parseFloat(phi_num.value);
+  history = []; t = 0; t_offset = 0; window.initializedOffset = undefined;
+  updateEquation();
+});
+func.addEventListener('change', ()=> { mode = func.value; history = []; t = 0; t_offset = 0; window.initializedOffset = undefined; updateEquation(); });
+
+updateOmegaFromL();
+updateEquation();
+
+/* Liên kết tốc độ mô phỏng */
+speedSel.addEventListener('change', () => {
+  simSpeed = parseFloat(speedSel.value);
+});
+
+/* Tính trạng thái con lắc tại thời điểm t (trả về theta (rad), x (m), y (m)) */
+function computePendulum(tval){
+  const arg = omega * tval + phi;
+  const theta = (mode === 'cos') ? theta0 * Math.cos(arg) : theta0 * Math.sin(arg);
+  const x = L * theta;
+  const y = L * Math.cos(theta);
+  return {theta, x, y};
+}
+
+/* Vẽ con lắc đơn */
+function drawSimulation(state){
+  // state: {theta,x,y} với x,y (m)
+  ctx.clearRect(0,0,canvas.width, canvas.height);
+
+  // Layout: phía trên canvas là con lắc, phía dưới là ...
+  const padding = 20;
+  const topHeight = Math.min(260, canvas.height * 0.45);
+  const originX = canvas.width / 2;
+  const originY = padding;
+
+  // Tỉ lệ hiển thị dựa trên pxPerMeter
+  const scale = pxPerMeter;
+
+  // Vị trí quả cầu
+  const bobX = originX + state.x * scale;
+  const bobY = originY + state.y * scale;
+
+  // Nền nhẹ cho vùng con lắc
+  ctx.fillStyle = 'rgba(255,255,255,0.03)';
+  ctx.fillRect(0, 0, canvas.width, topHeight);
+
+  // Vẽ mốc treo
+  ctx.fillStyle = '#222';
+  ctx.fillRect(originX-28, originY-8, 56, 12);
+
+  // Vẽ dây
+  ctx.strokeStyle = '#222';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(originX, originY);
+  ctx.lineTo(bobX, bobY);
+  ctx.stroke();
+
+  // Vẽ dây mềm (nét mảnh)
+  ctx.strokeStyle = 'rgba(0,0,0,0.06)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(originX+6, originY);
+  ctx.lineTo(bobX+4, bobY);
+  ctx.stroke();
+
+  // Vẽ quả cầu (bob)
+  const bobR = Math.max(10, Math.min(26, 0.04 * scale)); // bán kính tùy scale
+  ctx.fillStyle = '#ff3b7f';
+  ctx.beginPath();
+  ctx.arc(bobX, bobY, bobR, 0, Math.PI*2);
+  ctx.fill();
+  ctx.strokeStyle = '#b3164f';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Vệt sáng
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.fillRect(bobX - bobR/2 + 4, bobY - bobR/2 + 4, Math.max(4, bobR/2), 6);
+  
+  //Tọa độ hình chiếu
+  const proX = bobX;
+  const proY = 350;
+  
+  //Vẽ đường gióng từ con lắc đến hình chiếu
+  ctx.strokeStyle = "rgba(0,0,0,0.4)";
+  ctx.beginPath();
+  ctx.moveTo(bobX, bobY);      // từ con lắc
+  ctx.lineTo(proX, proY); // đến hình chiếu
+  ctx.stroke();
+
+}
+
+/* --- VẼ CHUYỂN ĐỘNG TRÒN ĐỀU --- */
+function drawCircularMotion(tval){
+  const R = L * theta0;         // bán kính hình tròn tham chiếu (m)
+  const scale = pxPerMeter;     // px/m
+
+  const originX = canvas.width /2;          // vị trí vẽ hình tròn (trái canvas)
+  const originY = canvas.height /2 +70;
+
+  const angle = omega * tval + phi;
+  
+  // Lưới
+  ctx.strokeStyle = '#e6e6e6'; ctx.lineWidth = 0.5;
+  for(let i=-10; i<=10; i++){
+    ctx.beginPath(); ctx.moveTo(0, originY + i*40); ctx.lineTo(canvas.width, originY + i*40); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(originX + i*40, 0); ctx.lineTo(originX + i*40, canvas.height); ctx.stroke();
+  }
+
+  // Tọa độ điểm P trên đường tròn
+  let xc, yc;
+  if (mode === "cos") {
+      xc = R * Math.cos(angle);
+      yc = R * Math.sin(angle);}
+    else {
+        xc = R * Math.sin(angle);
+        yc = -R * Math.cos(angle);
+    }
+
+  const Px = originX + xc * scale;
+  const Py = originY + yc * scale;
+
+  // Vẽ đường tròn
+  ctx.strokeStyle = "#222";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(originX, originY, R * scale, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Vẽ trục ngang
+  ctx.strokeStyle = "rgba(0,0,0,0.3)";
+  ctx.beginPath();
+  ctx.moveTo(originX - R*scale - 20, originY);
+  ctx.lineTo(originX + R*scale + 20, originY);
+  ctx.stroke();
+
+  // Vẽ điểm P (đỏ)
+  ctx.fillStyle = "#ff3b7f";
+  ctx.beginPath();
+  ctx.arc(Px, Py, 8, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Vẽ hình chiếu P xuống trục ngang
+  const projX = Px;
+  const projY = originY;
+
+  ctx.strokeStyle = "rgba(0,0,0,0.4)";
+  ctx.beginPath();
+  ctx.moveTo(Px, Py);
+  ctx.lineTo(projX, projY);
+  ctx.stroke();
+
+  ctx.fillStyle = "#ffa600";
+  ctx.beginPath();
+  ctx.arc(projX, projY, 6, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// Vòng lặp chính
+function update(){
+  if (running && !paused){
+    const state = computePendulum(t); // state.x (m)
+    history.push({t: t, x: state.x});
+    t_offset += dt;
+    ctx.clearRect(0,0,canvas.width, canvas.height);
+    drawSimulation(state);
+    drawCircularMotion(t);
+    t += dt * simSpeed;
+  }
+  requestAnimationFrame(update);
+}
+update();
+
+// Điều khiển
+toggleBtn.onclick = () => {
+    if (!running) {
+    running = true; paused=false;
+    toggleBtn.textContent="⏸ Tạm dừng";
+  } else {
+    paused=!paused;
+    toggleBtn.textContent = paused ? "▶ Tiếp tục" : "⏸ Tạm dừng";
+  }
+};
+    
+resetBtn.onclick = () => {
+  running = false;paused=false;
+  toggleBtn.textContent="▶ Chạy"
+  t = 0;  t_offset = 0;  history = [];
+  window.initializedOffset = undefined;
+  ctx.clearRect(0,0,canvas.width, canvas.height);
+  drawSimulation(computePendulum(0));
+  drawCircularMotion(0);
+};
+
+// Các sửa đổi đảm bảo reset history khi tham số thay đổi
+[A_slider, A_num, L_slider, L_num, phi_slider, phi_num, func].forEach(el=>{
+  el.addEventListener('change', ()=> {
+    history = [];
+    t = 0;
+    t_offset = 0;
+    window.initializedOffset = undefined;
+  });
+});
+
+function resizeCanvas() {
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width;   // width theo trình duyệt
+  canvas.height = 500;         // giữ nguyên height
+}
+
+window.addEventListener('resize', () => {
+  resizeCanvas();
+  drawSimulation(computePendulum(t));
+  drawCircularMotion(t);
+});
+
+resizeCanvas();
+
+// Vẽ ban đầu
+let initialState = computePendulum(0);
+drawSimulation(initialState);
+drawCircularMotion(0);
+
+</script>
+</body>
+</html>
